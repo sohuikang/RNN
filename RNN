@@ -1,0 +1,135 @@
+#패키지 준비하기
+
+from matplotlib import pyplot as plt
+from pandas import DataFrame
+import seaborn as sns
+import numpy as np
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, SimpleRNN, Embedding, Flatten
+from tensorflow.keras.datasets import imdb
+from tensorflow.keras.preprocessing.sequence import pad_sequences # 문장 길이를 통일 시키는 용도
+from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.callbacks import ReduceLROnPlateau
+from tensorflow.keras.callbacks import ModelCheckpoint
+from tensorflow.keras.preprocessing.text import Tokenizer
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, confusion_matrix
+
+#데이터셋 준비하기
+# 가장 빈번하게 사용되는 단어의 개수.
+num_words = 10000
+(x_train, y_train), (x_test, y_test) = imdb.load_data(num_words=num_words)
+print(f'훈련 데이터 {x_train.shape} 레이블 {y_train.shape}')
+print(f'검증 데이터 {x_test.shape} 레이블 {y_test.shape}')
+
+#데이터셋 분할
+np.random.seed(777)
+
+# 최대 문장 길이
+max_len = 500
+print('Before pad_sequences: ', len(x_train[0]))
+pad_x_train = pad_sequences(x_train, maxlen=max_len, padding = 'pre')
+pad_x_test = pad_sequences(x_test, maxlen=max_len, padding = 'pre')
+# 원래 단어의 앞에 ‘지정해준 단어의 길이 – 원래 단어의 길이’(500 –218)만큼 0이 추가된 것을 볼 수 있다.
+print('After pad_sequences: ', len(pad_x_train[0]))
+print(pad_x_train[0])
+
+#모델 개발
+model = Sequential()
+model.add(Embedding(input_dim = num_words, output_dim = 32))
+model.add(SimpleRNN(32, return_sequences=True, dropout=0.15, recurrent_dropout=0.15))
+model.add(SimpleRNN(16))
+model.add(Dense(1, activation = 'sigmoid'))
+model.compile(optimizer='adam',loss = 'binary_crossentropy', metrics = ['acc'])
+model.summary()
+
+#학습하기
+result = model.fit(pad_x_train, y_train, batch_size = 32, epochs = 30,
+                  validation_data=(pad_x_test, y_test), callbacks = [
+     EarlyStopping(monitor = 'val_loss', patience=5, verbose = 1),
+     ReduceLROnPlateau(monitor= "val_loss", patience=3, factor = 0.5,
+                       min_lr=0.0001, verbose=1)
+])
+result_df = DataFrame(result.history)
+result_df['epochs'] = result_df.index+1
+result_df.set_index('epochs', inplace=True)
+result_df
+
+
+#학습 결과 평가
+# 그래프 기본 설정
+# ----------------------------------------
+plt.rcParams["font.family"] = 'Malgun Gothic'
+plt.rcParams["font.size"] = 16
+plt.rcParams['axes.unicode_minus'] = False
+# 그래프를 그리기 위한 객체 생성
+# ----------------------------------------
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 5), dpi=150)
+# 1) 훈련 및 검증 손실 그리기
+# ----------------------------------------
+sns.lineplot(x=result_df.index, y='loss', data=result_df, color='blue',
+             label='훈련 손실률', ax=ax1)
+sns.lineplot(x=result_df.index, y='val_loss', data=result_df, color='orange',
+             label='검증 손실률', ax=ax1)
+ax1.set_title('훈련 및 검증 손실률')
+ax1.set_xlabel('반복회차')
+ax1.set_ylabel('손실률')
+ax1.grid()
+ax1.legend()
+# 2) 훈련 및 검증 정확도 그리기
+# ----------------------------------------
+sns.lineplot(x=result_df.index, y='acc', data=result_df, color = 'blue',
+            label = '훈련 정확도', ax=ax2)
+sns.lineplot(x=result_df.index, y='val_acc', data=result_df, color = 'orange',
+            label = '검증 정확도', ax=ax2)
+ax2.set_title('훈련 및 검증 정확도')
+ax2.set_xlabel('반복회차')
+ax2.set_ylabel('정확도')
+ax2.grid()
+ax2.legend()
+plt.show()
+plt.close()
+
+#모델 성능 평가
+evaluate = model.evaluate(pad_x_test, y_test)
+print("최종 손실률: %f, 최종 정확도: %f" % (evaluate[0], evaluate[1]))
+
+#학습 결과 적용
+result = model.predict(pad_x_test)
+data_count, case_count = result.shape
+print("%d개의 검증 데이터가 %d개의 경우의 수를 갖는다." % (data_count, case_count))
+result[0]
+
+f_results = result.flatten()
+f_results
+
+#결과 데이터셋 구성
+kdf = DataFrame({
+ '결과값': y_test,
+ '예측치' : np.round(f_results)
+})
+kdf['예측치'] = kdf['예측치'].astype('int')
+kdf
+
+#실제 결과값과 머신러닝에 의한 예측값 비교
+# 예측 데이터(ca_y_test)를 x축으로, 결과 데이터(results)를 y축으로 놓는 오차행렬(confusion_matrix) 생성하기
+cm = confusion_matrix(kdf['결과값'], kdf['예측치'])
+cmdf1 = DataFrame(cm, columns=['예측값(P)', '예측값(N)'],
+ index=['실제값(T)', '실제값(F)'])
+cmdf1
+
+#오차행렬 히트맵
+
+# --> 5를 분류할 때 가장 많이 혼란스러워 한다.
+# --> 오차행렬은 모델의 강점과 약점을 파악하기에 유용하다.
+plt.rcParams["font.family"] = 'Malgun Gothic'
+plt.rcParams["font.size"] = 16
+plt.rcParams["figure.figsize"] = (3, 3)
+# 오차 행렬을 히트맵 그래프로 표현
+# -> annot : 그래프의 각 칸에 수치값 출력
+# -> fmt : 수치값 출력 format (여기서는 10진수)
+# -> cmap : 색상맵 (https://matplotlib.org/3.2.1/tutorials/colors/colormaps.html)
+sns.heatmap(cm, annot= True, fmt= 'd',cmap= 'Blues')
+plt.xlabel('예측값')
+plt.ylabel('결과값')
+plt.show()
